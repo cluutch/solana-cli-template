@@ -1,3 +1,9 @@
+use byteorder::{ByteOrder, LittleEndian};
+use solana_sdk::instruction::Instruction;
+use solana_sdk::instruction::AccountMeta;
+use solana_sdk::pubkey::Pubkey;
+use core::str::FromStr;
+
 use {
     clap::{crate_description, crate_name, crate_version, App, AppSettings, Arg, SubCommand},
     solana_clap_utils::{
@@ -30,26 +36,38 @@ fn process_ping(
     signer: &dyn Signer,
     commitment_config: CommitmentConfig,
 ) -> Result<Signature, Box<dyn std::error::Error>> {
-    let from = signer.pubkey();
-    let to = signer.pubkey();
-    let amount = 0;
+    println!("Starting to process ping");
 
-    let mut transaction = Transaction::new_unsigned(Message::new(
-        &[system_instruction::transfer(&from, &to, amount)],
-        Some(&signer.pubkey()),
-    ));
+    let from = signer.pubkey();
+
+    let program_id = Pubkey::from_str("6EgWgFtrCsFyhsQLmpQ7sQPCXp3sY3CXEUhSkLjwpGCh")?;
+    println!("Program ID: {}", program_id);
+    let mut instruction_data: [u8; 4] = [0; 4];
+    LittleEndian::write_u32(&mut instruction_data[0..], 15900);
+    let mut transaction = Transaction::new_with_payer(
+        &[Instruction::new(
+            program_id,
+            &instruction_data,
+            vec![AccountMeta::new(from, false)],
+        )],
+        Some(&from),
+    );
+    println!("Constructed transaction");
 
     let (recent_blockhash, _fee_calculator) = rpc_client
         .get_recent_blockhash()
         .map_err(|err| format!("error: unable to get recent blockhash: {}", err))?;
+    println!("Got recent blockhash");
 
     transaction
         .try_sign(&vec![signer], recent_blockhash)
         .map_err(|err| format!("error: failed to sign transaction: {}", err))?;
+    println!("Signed transaction");
 
     let signature = rpc_client
         .send_and_confirm_transaction_with_spinner_and_commitment(&transaction, commitment_config)
         .map_err(|err| format!("error: send transaction: {}", err))?;
+    println!("Processed transaction");
 
     Ok(signature)
 }
@@ -151,6 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if config.verbose {
         println!("JSON RPC URL: {}", config.json_rpc_url);
+        println!("Signer: {}", config.default_signer.pubkey());
     }
     let rpc_client = RpcClient::new(config.json_rpc_url.clone());
 
