@@ -1,3 +1,9 @@
+use byteorder::{ByteOrder, LittleEndian};
+use solana_sdk::instruction::Instruction;
+use solana_sdk::instruction::AccountMeta;
+use solana_sdk::pubkey::Pubkey;
+use core::str::FromStr;
+
 use {
     clap::{crate_description, crate_name, crate_version, App, AppSettings, Arg, SubCommand},
     solana_clap_utils::{
@@ -9,7 +15,6 @@ use {
     solana_remote_wallet::remote_wallet::RemoteWalletManager,
     solana_sdk::{
         commitment_config::CommitmentConfig,
-        message::Message,
         native_token::Sol,
         signature::{Signature, Signer},
         system_instruction,
@@ -30,27 +35,82 @@ fn process_ping(
     signer: &dyn Signer,
     commitment_config: CommitmentConfig,
 ) -> Result<Signature, Box<dyn std::error::Error>> {
-    let from = signer.pubkey();
-    let to = signer.pubkey();
-    let amount = 0;
+    println!("Starting to process ping");
+    let program_id = Pubkey::from_str("6EgWgFtrCsFyhsQLmpQ7sQPCXp3sY3CXEUhSkLjwpGCh")?;
+    let data_id = Pubkey::from_str("EFksXm1CaRw14VQmptiG8GStr42UJGptLHwoYR9Q5WNb")?;
+    let price = 159000;
 
-    let mut transaction = Transaction::new_unsigned(Message::new(
-        &[system_instruction::transfer(&from, &to, amount)],
-        Some(&signer.pubkey()),
-    ));
+    let from = signer.pubkey();
+    println!("From ID: {}", from);
+    println!("Program ID: {}", program_id);
+    let mut instruction_data: [u8; 4] = [0; 4];
+    LittleEndian::write_u32(&mut instruction_data[0..], price);
+    let mut transaction = Transaction::new_with_payer(
+        &[Instruction::new(
+            program_id,
+            &instruction_data,
+            vec![AccountMeta::new(data_id, false)],
+        )],
+        Some(&from),
+    );
+    println!("Constructed transaction");
 
     let (recent_blockhash, _fee_calculator) = rpc_client
         .get_recent_blockhash()
         .map_err(|err| format!("error: unable to get recent blockhash: {}", err))?;
+    println!("Got recent blockhash");
 
     transaction
         .try_sign(&vec![signer], recent_blockhash)
         .map_err(|err| format!("error: failed to sign transaction: {}", err))?;
+    println!("Signed transaction");
 
     let signature = rpc_client
         .send_and_confirm_transaction_with_spinner_and_commitment(&transaction, commitment_config)
         .map_err(|err| format!("error: send transaction: {}", err))?;
+    println!("Processed transaction");
 
+    Ok(signature)
+}
+
+fn create_data_account(
+    rpc_client: &RpcClient,
+    signer: &dyn Signer,
+    commitment_config: CommitmentConfig,
+) -> Result<Signature, Box<dyn std::error::Error>> {
+    let seed = "api.cluutch.io/v2/quotes";
+    let program_id = Pubkey::from_str("6EgWgFtrCsFyhsQLmpQ7sQPCXp3sY3CXEUhSkLjwpGCh")?;
+    let data_num_bytes = 32;
+    let data_lamports = 11235813;
+
+    let signer_pub = signer.pubkey();
+    println!("Starting to create data account from {} with owner {}", signer_pub, program_id);
+
+    let data_account_pubkey = Pubkey::create_with_seed(&signer.pubkey(), seed, &program_id).unwrap();
+    println!("Data account is {}", data_account_pubkey);
+    let instruction = system_instruction::create_account_with_seed(&signer_pub, &data_account_pubkey, &signer_pub, seed, data_lamports, data_num_bytes, &program_id);
+
+    let mut transaction = Transaction::new_with_payer(
+        &[instruction],
+        Some(&signer_pub),
+    );
+    println!("Constructed account transaction");
+
+    let (recent_blockhash, _fee_calculator) = rpc_client
+        .get_recent_blockhash()
+        .map_err(|err| format!("error: unable to get recent blockhash: {}", err))?;
+    println!("Got recent blockhash");
+
+    transaction
+        .try_sign(&vec![signer], recent_blockhash)
+        .map_err(|err| format!("error: failed to sign transaction: {}", err))?;
+    println!("Signed account transaction");
+
+    let signature = rpc_client
+        .send_and_confirm_transaction_with_spinner_and_commitment(&transaction, commitment_config)
+        .map_err(|err| format!("error: send transaction: {}", err))?;
+    println!("Processed account transaction");
+    
     Ok(signature)
 }
 
@@ -111,6 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         )
         .subcommand(SubCommand::with_name("ping").about("Send a ping transaction"))
+        .subcommand(SubCommand::with_name("create-data-account").about("Create data account"))
         .get_matches();
 
     let (sub_command, sub_matches) = app_matches.subcommand();
@@ -151,6 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if config.verbose {
         println!("JSON RPC URL: {}", config.json_rpc_url);
+        println!("Signer: {}", config.default_signer.pubkey());
     }
     let rpc_client = RpcClient::new(config.json_rpc_url.clone());
 
@@ -168,6 +230,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         ("ping", Some(_arg_matches)) => {
             let signature = process_ping(
+                &rpc_client,
+                config.default_signer.as_ref(),
+                config.commitment_config,
+            )
+            .unwrap_or_else(|err| {
+                eprintln!("error: send transaction: {}", err);
+                exit(1);
+            });
+            println!("Signature: {}", signature);
+        }
+        ("create-data-account", Some(_arg_matches)) => {
+            let mut signature = create_data_account(
                 &rpc_client,
                 config.default_signer.as_ref(),
                 config.commitment_config,

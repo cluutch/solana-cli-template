@@ -54,3 +54,6 @@ It provides three pieces of functionality:
       help       Prints this message or the help of the given subcommand(s)
       ping       Send a ping transaction
   ```
+
+### Debugging
+Use `export RUST_LOG=solana=debug`. `RUST_BACKTRACE=1` can also be useful.
